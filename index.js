@@ -7,6 +7,8 @@ const TOKEN = process.env.DISCORD_TOKEN;
 const GUILD_ID = process.env.GUILD_ID;
 const CHANNEL_ID = process.env.CHANNEL_ID;
 const ROLE_ID = process.env.ROLE_ID;
+const ROLE_ID_2 = process.env.ROLE_ID_2;       // Druga rola (opcjonalna)
+const ROLE_ID_3 = process.env.ROLE_ID_3;       // Trzecia rola (opcjonalna)
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 const PORT = process.env.PORT || 3000;
 
@@ -31,52 +33,25 @@ const client = new Client({
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 
-// ===== CORS - ZEZWOLENIE NA REQUESTY Z TWOJEJ STRONY =====
-// Dodaj tutaj adres swojej strony na Cloudflare Pages
-const ALLOWED_ORIGINS = [
-  'https://baza-gddkia.pages.dev',
-  'https://baza-gddkia.pages.dev/',
-  'http://localhost:3000',
-  'http://localhost:5500',
-  'http://127.0.0.1:5500'
-];
-
+// ===== CORS =====
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-
-  // Zezwól na requesty z dozwolonych domen
-  if (ALLOWED_ORIGINS.includes(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-  } else {
-    // Zezwól na wszystkie (mniej bezpieczne, ale działa z każdej domeny)
-    res.setHeader('Access-Control-Allow-Origin', '*');
-  }
-
+  res.setHeader('Access-Control-Allow-Origin', origin || '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Webhook-Secret');
   res.setHeader('Access-Control-Max-Age', '86400');
-
-  // Obsługa preflight request (OPTIONS)
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-
+  if (req.method === 'OPTIONS') return res.status(200).end();
   next();
 });
 
-// Health check (Railway sprawdza czy bot żyje)
+// Health check
 app.get('/', (req, res) => {
-  res.json({
-    status: 'online',
-    bot: client.user ? client.user.tag : 'łączenie...',
-    uptime: process.uptime()
-  });
+  res.json({ status: 'online', bot: client.user ? client.user.tag : 'łączenie...', uptime: process.uptime() });
 });
 
-// Główny endpoint - odbiera podania ze strony
+// Główny endpoint
 app.post('/api/submit', async (req, res) => {
   try {
-    // Weryfikacja secret (żeby nikt inny nie mógł wysyłać fałszywych podań)
     const authHeader = req.headers['x-webhook-secret'];
     if (authHeader !== WEBHOOK_SECRET) {
       console.log('🚫 Odrzucono request - zły secret');
@@ -84,22 +59,16 @@ app.post('/api/submit', async (req, res) => {
     }
 
     const data = req.body;
-    if (!data || !data.answers) {
-      return res.status(400).json({ error: 'Invalid data' });
-    }
+    if (!data || !data.answers) return res.status(400).json({ error: 'Invalid data' });
 
     const answers = data.answers;
     const timestamp = data.timestamp || new Date().toISOString();
 
-    // Pobierz kanał
     const channel = await client.channels.fetch(CHANNEL_ID);
-    if (!channel) {
-      return res.status(500).json({ error: 'Channel not found' });
-    }
+    if (!channel) return res.status(500).json({ error: 'Channel not found' });
 
-    // Stwórz embed z podaniem
     const embed = new EmbedBuilder()
-      .setColor(0xf26522) // Pomarańcz GDDKiA
+      .setColor(0xf26522)
       .setTitle('🛣️ Nowe podanie do GDDKiA')
       .setDescription('Kliknij przycisk poniżej, aby rozpatrzyć podanie.')
       .addFields(
@@ -131,29 +100,17 @@ app.post('/api/submit', async (req, res) => {
       .setFooter({ text: `ID podania: ${Date.now()} | ${new Date(timestamp).toLocaleString('pl-PL')}` })
       .setTimestamp();
 
-    // Przyciski
     const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId('accept_' + Date.now())
-        .setLabel('✅ Zaakceptuj')
-        .setStyle(ButtonStyle.Success),
-      new ButtonBuilder()
-        .setCustomId('reject_' + Date.now())
-        .setLabel('❌ Odrzuć')
-        .setStyle(ButtonStyle.Danger)
+      new ButtonBuilder().setCustomId('accept_' + Date.now()).setLabel('✅ Zaakceptuj').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId('reject_' + Date.now()).setLabel('❌ Odrzuć').setStyle(ButtonStyle.Danger)
     );
 
-    // Wyślij wiadomość na kanał
-    await channel.send({
-      embeds: [embed],
-      components: [row]
-    });
-
+    await channel.send({ embeds: [embed], components: [row] });
     console.log('✅ Podanie wysłane na kanał:', CHANNEL_ID);
     res.json({ success: true, message: 'Podanie wysłane na kanał' });
 
   } catch (err) {
-    console.error('❌ Błąd podczas przetwarzania podania:', err);
+    console.error('❌ Błąd:', err);
     res.status(500).json({ error: 'Internal server error', details: err.message });
   }
 });
@@ -162,27 +119,20 @@ app.post('/api/submit', async (req, res) => {
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isButton()) return;
 
-  const customId = interaction.customId;
-  const isAccept = customId.startsWith('accept_');
-  const isReject = customId.startsWith('reject_');
-
+  const isAccept = interaction.customId.startsWith('accept_');
+  const isReject = interaction.customId.startsWith('reject_');
   if (!isAccept && !isReject) return;
 
   try {
-    // Pobierz nick Discord z embeda (z pierwszego fielda)
     const embed = interaction.message.embeds[0];
     const nickField = embed.fields.find(f => f.name.includes('Nick Discord'));
     const discordNick = nickField ? nickField.value : null;
 
     if (!discordNick || discordNick === 'Brak') {
-      await interaction.reply({
-        content: '❌ Nie można znaleźć nicku Discord w podaniu.',
-        ephemeral: true
-      });
+      await interaction.reply({ content: '❌ Nie można znaleźć nicku Discord.', ephemeral: true });
       return;
     }
 
-    // Znajdź użytkownika na serwerze po nicku
     const guild = await client.guilds.fetch(GUILD_ID);
     const members = await guild.members.fetch();
     const member = members.find(m => 
@@ -193,113 +143,99 @@ client.on('interactionCreate', async (interaction) => {
     );
 
     if (!member) {
-      await interaction.reply({
-        content: `❌ Nie znaleziono użytkownika **${discordNick}** na serwerze. Upewnij się, że podał poprawny nick.`,
-        ephemeral: true
-      });
+      await interaction.reply({ content: `❌ Nie znaleziono użytkownika **${discordNick}** na serwerze.`, ephemeral: true });
       return;
     }
 
     const user = member.user;
 
     if (isAccept) {
-      // === AKCEPTACJA ===
+      // === AKCEPTACJA — NADAJ 3 ROLE ===
+      const rolesToAdd = [];
+      const roleNames = [];
 
-      // 1. Nadaj rolę
-      const role = await guild.roles.fetch(ROLE_ID);
-      if (!role) {
-        await interaction.reply({
-          content: '❌ Nie znaleziono roli do nadania. Sprawdź ROLE_ID w .env',
-          ephemeral: true
-        });
+      // Rola 1 (wymagana)
+      const role1 = await guild.roles.fetch(ROLE_ID);
+      if (role1) { rolesToAdd.push(role1); roleNames.push(role1.name); }
+
+      // Rola 2 (opcjonalna)
+      if (ROLE_ID_2) {
+        const role2 = await guild.roles.fetch(ROLE_ID_2);
+        if (role2) { rolesToAdd.push(role2); roleNames.push(role2.name); }
+      }
+
+      // Rola 3 (opcjonalna)
+      if (ROLE_ID_3) {
+        const role3 = await guild.roles.fetch(ROLE_ID_3);
+        if (role3) { rolesToAdd.push(role3); roleNames.push(role3.name); }
+      }
+
+      if (rolesToAdd.length === 0) {
+        await interaction.reply({ content: '❌ Nie znaleziono żadnych ról do nadania.', ephemeral: true });
         return;
       }
 
-      await member.roles.add(role).catch(err => {
-        console.error('Błąd nadawania roli:', err);
-        throw new Error('Nie udało się nadać roli. Sprawdź czy rola bota jest wyżej niż rola do nadania.');
-      });
-
-      // 2. Wyślij DM do użytkownika
-      try {
-        await user.send({
-          embeds: [
-            new EmbedBuilder()
-              .setColor(0x28a745)
-              .setTitle('✅ Podanie zaakceptowane!')
-              .setDescription(`Gratulacje! Twoje podanie do **GDDKiA** zostało **zaakceptowane** przez ${interaction.user.tag}.\n\nNadano Ci rolę **${role.name}**.\n\nZapraszamy na serwer!`)
-              .setTimestamp()
-          ]
+      // Nadaj wszystkie role
+      for (const role of rolesToAdd) {
+        await member.roles.add(role).catch(err => {
+          console.error(`Błąd nadawania roli ${role.name}:`, err);
         });
-      } catch (dmErr) {
-        console.log('Nie udało się wysłać DM do', user.tag, '- użytkownik może mieć wyłączone DM');
       }
 
-      // 3. Odpowiedź na interakcję
+      // Wyślij DM
+      try {
+        await user.send({
+          embeds: [new EmbedBuilder()
+            .setColor(0x28a745)
+            .setTitle('✅ Podanie zaakceptowane!')
+            .setDescription(`Gratulacje! Twoje podanie do **GDDKiA** zostało **zaakceptowane** przez ${interaction.user.tag}.\n\nNadano Ci role: **${roleNames.join(', ')}**.\n\nZapraszamy na serwer!`)
+            .setTimestamp()]
+        });
+      } catch (dmErr) {
+        console.log('Nie udało się wysłać DM do', user.tag);
+      }
+
       await interaction.reply({
-        content: `✅ **Zaakceptowano** podanie użytkownika **${user.tag}**. Rola **${role.name}** nadana, DM wysłane.`,
+        content: `✅ **Zaakceptowano** podanie użytkownika **${user.tag}**. Nadano role: **${roleNames.join(', ')}**.`,
         ephemeral: true
       });
 
-      // 4. Zaktualizuj oryginalną wiadomość (usuń przyciski, dodaj info)
       const updatedEmbed = EmbedBuilder.from(embed)
         .setColor(0x28a745)
         .setTitle('🛣️ Podanie do GDDKiA — ZAAKCEPTOWANE')
-        .setDescription(`✅ Zaakceptowane przez ${interaction.user.tag}`)
+        .setDescription(`✅ Zaakceptowane przez ${interaction.user.tag}\nNadano role: ${roleNames.join(', ')}`)
         .setFooter({ text: `Zaakceptowano: ${new Date().toLocaleString('pl-PL')}` });
 
-      await interaction.message.edit({
-        embeds: [updatedEmbed],
-        components: [] // Usuń przyciski
-      });
-
-      console.log('✅ Zaakceptowano podanie użytkownika:', user.tag);
+      await interaction.message.edit({ embeds: [updatedEmbed], components: [] });
+      console.log('✅ Zaakceptowano:', user.tag, '| Role:', roleNames.join(', '));
 
     } else {
       // === ODRZUCENIE ===
-
-      // 1. Wyślij DM do użytkownika
       try {
         await user.send({
-          embeds: [
-            new EmbedBuilder()
-              .setColor(0xdc3545)
-              .setTitle('❌ Podanie odrzucone')
-              .setDescription(`Twoje podanie do **GDDKiA** zostało **odrzucone** przez ${interaction.user.tag}.\n\nMożesz spróbować ponownie w przyszłości.`)
-              .setTimestamp()
-          ]
+          embeds: [new EmbedBuilder()
+            .setColor(0xdc3545)
+            .setTitle('❌ Podanie odrzucone')
+            .setDescription(`Twoje podanie do **GDDKiA** zostało **odrzucone** przez ${interaction.user.tag}.`)
+            .setTimestamp()]
         });
-      } catch (dmErr) {
-        console.log('Nie udało się wysłać DM do', user.tag, '- użytkownik może mieć wyłączone DM');
-      }
+      } catch (dmErr) { console.log('Nie udało się wysłać DM do', user.tag); }
 
-      // 2. Odpowiedź na interakcję
-      await interaction.reply({
-        content: `❌ **Odrzucono** podanie użytkownika **${user.tag}**. DM wysłane.`,
-        ephemeral: true
-      });
+      await interaction.reply({ content: `❌ **Odrzucono** podanie użytkownika **${user.tag}**.`, ephemeral: true });
 
-      // 3. Zaktualizuj oryginalną wiadomość
       const updatedEmbed = EmbedBuilder.from(embed)
         .setColor(0xdc3545)
         .setTitle('🛣️ Podanie do GDDKiA — ODRZUCONE')
         .setDescription(`❌ Odrzucone przez ${interaction.user.tag}`)
         .setFooter({ text: `Odrzucono: ${new Date().toLocaleString('pl-PL')}` });
 
-      await interaction.message.edit({
-        embeds: [updatedEmbed],
-        components: [] // Usuń przyciski
-      });
-
-      console.log('❌ Odrzucono podanie użytkownika:', user.tag);
+      await interaction.message.edit({ embeds: [updatedEmbed], components: [] });
+      console.log('❌ Odrzucono:', user.tag);
     }
 
   } catch (err) {
-    console.error('❌ Błąd podczas obsługi przycisku:', err);
-    await interaction.reply({
-      content: `❌ Wystąpił błąd: ${err.message}`,
-      ephemeral: true
-    }).catch(() => {});
+    console.error('❌ Błąd:', err);
+    await interaction.reply({ content: `❌ Błąd: ${err.message}`, ephemeral: true }).catch(() => {});
   }
 });
 
@@ -309,20 +245,11 @@ client.once('ready', () => {
   console.log('   Tag:', client.user.tag);
   console.log('   Serwer:', GUILD_ID);
   console.log('   Kanał:', CHANNEL_ID);
-  console.log('   Rola:', ROLE_ID);
-  console.log('   Webhook:', `http://localhost:${PORT}/api/submit`);
-
-  // Ustaw status bota
-  client.user.setActivity('podania GDDKiA', { type: 3 }); // 3 = WATCHING
+  console.log('   Rola 1:', ROLE_ID);
+  console.log('   Rola 2:', ROLE_ID_2 || '(nie ustawiona)');
+  console.log('   Rola 3:', ROLE_ID_3 || '(nie ustawiona)');
+  client.user.setActivity('podania GDDKiA', { type: 3 });
 });
 
-// Start Express
-app.listen(PORT, () => {
-  console.log(`🌐 Webhook nasłuchuje na porcie ${PORT}`);
-});
-
-// Login
-client.login(TOKEN).catch(err => {
-  console.error('❌ Błąd logowania bota:', err.message);
-  process.exit(1);
-});
+app.listen(PORT, () => console.log(`🌐 Webhook na porcie ${PORT}`));
+client.login(TOKEN).catch(err => { console.error('❌ Błąd logowania:', err.message); process.exit(1); });
