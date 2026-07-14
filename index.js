@@ -31,6 +31,39 @@ const client = new Client({
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 
+// ===== CORS - ZEZWOLENIE NA REQUESTY Z TWOJEJ STRONY =====
+// Dodaj tutaj adres swojej strony na Cloudflare Pages
+const ALLOWED_ORIGINS = [
+  'https://baza-gddkia.pages.dev',
+  'https://baza-gddkia.pages.dev/',
+  'http://localhost:3000',
+  'http://localhost:5500',
+  'http://127.0.0.1:5500'
+];
+
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+
+  // Zezwól na requesty z dozwolonych domen
+  if (ALLOWED_ORIGINS.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  } else {
+    // Zezwól na wszystkie (mniej bezpieczne, ale działa z każdej domeny)
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  }
+
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Webhook-Secret');
+  res.setHeader('Access-Control-Max-Age', '86400');
+
+  // Obsługa preflight request (OPTIONS)
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  next();
+});
+
 // Health check (Railway sprawdza czy bot żyje)
 app.get('/', (req, res) => {
   res.json({
@@ -110,15 +143,6 @@ app.post('/api/submit', async (req, res) => {
         .setStyle(ButtonStyle.Danger)
     );
 
-    // Zapisz dane podania w pamięci (do użycia przy kliknięciu przycisku)
-    // W produkcji lepiej użyć bazy danych (Redis, PostgreSQL itp.)
-    const applicationId = Date.now().toString();
-    client.applications = client.applications || new Map();
-    client.applications.set(applicationId, {
-      discordNick: answers.q3,
-      timestamp: timestamp
-    });
-
     // Wyślij wiadomość na kanał
     await channel.send({
       embeds: [embed],
@@ -126,11 +150,11 @@ app.post('/api/submit', async (req, res) => {
     });
 
     console.log('✅ Podanie wysłane na kanał:', CHANNEL_ID);
-    res.json({ success: true, applicationId });
+    res.json({ success: true, message: 'Podanie wysłane na kanał' });
 
   } catch (err) {
     console.error('❌ Błąd podczas przetwarzania podania:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Internal server error', details: err.message });
   }
 });
 
